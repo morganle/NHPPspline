@@ -1,4 +1,4 @@
-Package: splineFit
+Package: NHPPspline
 Type: Package
 Title: Fitting and Generating Nonhomogeneous Poisson Process (NHPP) Arrivals.
 Version: 0.1.0
