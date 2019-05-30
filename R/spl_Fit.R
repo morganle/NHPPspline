@@ -37,7 +37,7 @@
 # Returns the optimal spline coefficients and the knot points it was built upon
 
 ## Prerequisits
-# This function requires the packages Gurobi, psych, pracma and parallel
+# This function requires the packages psych, pracma, parallel, Matrix and optiSolve
 
 ## Inputs
 # Arrivals - a vector of arrival times. If multiple days the days are appended and not sorted.
@@ -57,13 +57,6 @@
 
 spl_Fit <- function(Arrivals,m,n_arrs,Tstart,Tend,kn,cyclic,c_init=NULL,pplot=NULL)
 {
-  if(require("gurobi")==FALSE)
-  {
-    print("Error: You must download gurobi to run this function. Gurobi is a commercial computer program. You will need to obtain a license for Gurobi before use. See https://cran.r-project.org/web/packages/prioritizr/vignettes/gurobi_installation.html for a guide to obtaining a license and installation")
-    return(0)
-  }
-  else
-  {
     # setting up the knot sequence
     min_boundary<-Tstart
     max_boundary<-Tend
@@ -105,6 +98,7 @@ spl_Fit <- function(Arrivals,m,n_arrs,Tstart,Tend,kn,cyclic,c_init=NULL,pplot=NU
     lam<-0
     if(is.null(c_init)==FALSE){  c_init<-rep(c_init,n)
     } else{c_init<-rep(mean(n_arrs)/Tend,n)}
+
     c_warm<-opt_c(c_init,Delta,Delta_max,eta,epsilon,max_it,lam,all_arrs,m,Omeg,knots,B_spl,int_B,d,Tend,cyclic)
 
     ## check we're moving towards the minimum RIC
@@ -146,57 +140,10 @@ spl_Fit <- function(Arrivals,m,n_arrs,Tstart,Tend,kn,cyclic,c_init=NULL,pplot=NU
     OO<-list(c_op,knots) #as.num(t(output))
     names(OO) <-c("Opt_Spl_Coeffs", "Knots")
     return(OO)
-  }
 }
 
-## DESCRIPTION
-# trust region optimisation (TRO) algorithm
-# n - the dimension of the optimisation problem
 
 
-# solves the TRO subproblem
-# aiming to minimise -m(p)
-Opt_gurobi<-function(B,g,n,Delta,c,knots,d,Tend,cyclic){
-  yip<-0.000000001
-
-  ##  B postive-definite
-  model<-list()
-
-  #objective function - to minimise m() subject to p
-  model$Q<- -0.5*B
-  model$obj<- -g
-
-  if(cyclic == TRUE){
-    A<-matrix(rep(0,length(c)*3),nrow=3)
-    for(i in 1:length(c)){
-      A[1,i]<-B_spline_val(0,knots,d,i)-B_spline_val(Tend-yip,knots,d,i)
-      A[2,i]<-rth_deriv_B_mu(x=0,knots,d,1,i)-rth_deriv_B_mu(x=(Tend-yip),knots,d,1,i)
-      A[3,i]<-rth_deriv_B_mu(x=0,knots,d,2,i)-rth_deriv_B_mu(x=(Tend-yip),knots,d,2,i)
-    }
-    model$A<-A
-    model$rhs<-c(0,0,0)
-    model$sense<-c("=","=","=")
-  }else{
-    #linear constraint - there are none
-    model$A<-matrix(rep(0,length(c)),nrow=1,byrow=T)
-    model$sense <- c("=")
-    model$rhs <- c(0)
-  }
-
-  model$lb<- -c + rep(0.0001,n)      # the model cannot return a step that takes the rate below 0
-
-  #quad constraint
-  qc1<-list()
-  qc1$Qc<-spMatrix(n,n,seq(1,n,by=1),seq(1,n,by=1),rep(1,n))
-  qc1$rhs<-Delta^2
-
-  params<-list(OutputFlag = 0)
-  model$quadcon<-list(qc1)
-  result<-gurobi(model,params)$x
-  model$modelsense <- "min"
-
-  return (result)
-}
 ## DESCRIPTION
 # calculates the penalty on the NHPP log-likelihood
 
@@ -607,14 +554,6 @@ f<-function(x,knots,c,d)
 f_b<-Vectorize(f,"x")
 
 
-#### The Likelihood function
-
-# the penalised NHPP likelihood that we will try to maximise
-l_p<-function(c,knots,all_arrs,lam,m,Omeg,Tend){
-
-  l <- sum(log(f_b(all_arrs,knots,c,3))) - m*integral(f_b,xmin=0,xmax=Tend,knots=knots,c=c,d=3) - 0.5*lam*t(c)%*%Omeg%*%c
-  return(l)
-}
 
 # A second-order Taylor series approximation of the likelihood function
 # the model of the likelihood - where H should be PD
@@ -644,6 +583,47 @@ RIC<-function(lam,c,knots,all_arrs,m,Omeg,Tend,m_i,arrs_unordered,B,B_uo,int_B){
   return(-2*l_p(c,knots,all_arrs,lam,m,Omeg,Tend) + 2*tr(I%*%solve(J)))
 }
 
+
+## DESCRIPTION
+# trust region optimisation (TRO) algorithm
+# n - the dimension of the optimisation problem
+
+# solves the TRO subproblem
+# aiming to minimise -m(p)
+
+Opt_alt<-function(B,g,n,Delta,c,knots,d,Tend,cyclic,all_arrs,lam,m,Omeg){
+  yip<-0.000000001
+
+  obj<- quadfun(-0.5*B,-g,0)#,-l_p(c,knots,all_arrs,lam,m,Omeg,Tend))
+  qcon<-quadcon(spMatrix(n,n,seq(1,n,by=1),seq(1,n,by=1),rep(1,n)),a=rep(0,n),d=0,dir="<=",Delta,use=TRUE)
+
+  if(cyclic == TRUE){
+    A<-matrix(rep(0,length(c)*3),nrow=3)
+    for(i in 1:length(c)){
+      A[1,i]<-B_spline_val(0,knots,d,i)-B_spline_val(Tend-yip,knots,d,i)
+      A[2,i]<-rth_deriv_B_mu(x=0,knots,d,1,i)-rth_deriv_B_mu(x=(Tend-yip),knots,d,1,i)
+      A[3,i]<-rth_deriv_B_mu(x=0,knots,d,2,i)-rth_deriv_B_mu(x=(Tend-yip),knots,d,2,i)
+    }
+    rownames(A)<-c("1","2","3")
+    dir=c("==","==","==")
+    val = c(0,0,0)
+    lcon<-lincon( A=A , dir = dir,val=val)
+  }else{
+    A<-matrix(rep(0,length(c)),nrow=1,byrow=T)
+    rownames(A)<-c("1")
+    lcon<-lincon(A,dir=rep("==",nrow(A)),val=0)
+  }
+  lbc <- lbcon(val = -c + rep(0.0001,length(g)))
+
+  op<-cop(obj, max=FALSE, lb=lbc , lc=lcon, qc=qcon)
+
+  X<-c
+  ### here is the problem
+  names(X)<-paste(1:length(c))
+  result <- solvecop(op,solver="alabama",X=X,quiet=TRUE)
+  return (result$x )
+}
+
 ## DESCRIPTION
 
 # Finds the optimal values of the spline coefficients
@@ -655,7 +635,8 @@ opt_c<-function(c_init,Delta,Delta_max,eta,epsilon,max_it,lam,all_arrs,m,Omeg,kn
   {
     H<- Hess(c_k,knots,all_arrs,lam,m,Omeg,B)
     g<- Grad(c_k,knots,all_arrs,lam,m,Omeg,B,int_B)
-    p_k<- Opt_gurobi(H,g,length(c_k),Delta,c_k,knots,d,Tend,cyclic)    #takes in the Hessian and gradient of the likelihood
+
+    p_k<- Opt_alt(H,g,length(c_k),Delta,c_k,knots,d,Tend,cyclic,all_arrs,lam,m,Omeg)    #takes in the Hessian and gradient of the likelihood
     l<- l_p(c_k,knots,all_arrs,lam,m,Omeg,Tend)
     rho_k<- ( -l + l_p(c_k+p_k,knots,all_arrs,lam,m,Omeg,Tend)) / (-l + m_p(c_k,knots,all_arrs,lam,m,Omeg,Tend,g,H,p_k))
     if(rho_k < 0.25)
@@ -698,6 +679,31 @@ Grad<-function(c,knots,all_arrs,lam,m,Omeg,B,int_B){
   Grad_p <- S_sum - m*int_B - 0.5*lam*t(c)%*%Omeg
   return(as.vector(Grad_p))
 }
+
+#### The Likelihood function
+
+# the penalised NHPP likelihood that we will try to maximise
+l_p<-function(c,knots,all_arrs,lam,m,Omeg,Tend){
+
+  l <- sum(log(f_b(all_arrs,knots,c,3))) - m*integral(f_b,xmin=0,xmax=Tend,knots=knots,c=c,d=3) - 0.5*lam*t(c)%*%Omeg%*%c
+  return(l)
+}
+
+
+l_inf<-function(c,knots,all_arrs,lam,m,Omeg,Tend,B,int_B){
+  a<-which(c<0)
+  print(a)
+  if(length(a)>0){c[a]=0}
+  value <- sum(log(f_b(all_arrs,knots,c,3))) - m*integral(f_b,xmin=0,xmax=Tend,knots=knots,c=c,d=3) - 0.5*lam*t(c)%*%Omeg%*%c
+  gradient<-Grad(c,knots,all_arrs,lam,m,Omeg,B,int_B)
+  hessian<-Hess(c,knots,all_arrs,lam,m,Omeg,B)
+  print(value)
+  print(c)
+  l<-list(value,gradient,hessian)
+  names(l)<-c("value","gradient","hessian")
+  return(l)
+}
+
 
 I_calc<-function(m_i,arrs_unordered,c,knots,lam,m,Omeg,B_uo,int_B){
   n<-length(c)
