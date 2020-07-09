@@ -133,7 +133,7 @@ spl_Fit <- function(Arrivals,m,n_arrs,Tstart,Tend,kn,cyclic,c_init=NULL,pplot=NU
     c_op<-opt_c(c_warm,Delta,Delta_max,eta,epsilon,max_it,lam_opt,all_arrs,m,Omeg,knots,B_spl,int_B,d,Tend,cyclic)    #optimal spline coefficients for the optimal penalty
 
     if(is.null(pplot)==FALSE){     ## optional plot of the spline function
-      q<-seq(knots[d+1],knots[n],by=0.1)
+      q<-seq(knots[d+1],knots[n+1],by=0.1)
       plot(q,f_b(q,knots,c_op,d),type="l",col="blue",xlim=c(0,Tend),ylim=c(0,15),lwd=1,ylab="Rate Function",xlab="Time, t")#,xlim=c(0,Tend))
     }
 
